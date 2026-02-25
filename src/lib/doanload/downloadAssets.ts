@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile, rm, stat, copyFile, rename } from "fs/promises";
 import { createHash } from "crypto";
 import { join, dirname, basename } from "path";
-import { existsSync, createReadStream } from "fs";
+import { existsSync, createReadStream, mkdirSync } from "fs";
 
 let _curPath: string = "";
 let _curPid: string = "";
