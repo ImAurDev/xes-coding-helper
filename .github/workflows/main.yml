@@ -1,0 +1,117 @@
+name: Cross-Platform Build with Bun
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: linux
+          - os: windows-latest
+            artifact_name: windows
+          - os: macos-latest
+            artifact_name: macos
+
+    steps:
+      # 检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 安装 Bun (官方推荐方式)
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest  # 或指定具体版本如 "1.2.3"
+
+      # 缓存 Bun 依赖 (加速后续构建)
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun
+            node_modules
+            bun.lockb
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      # 安装依赖
+      - name: Install dependencies
+        run: bun install
+
+      # 运行测试 (可选)
+      - name: Run tests
+        run: bun test
+
+      # 执行构建
+      - name: Build application
+        run: bun run build
+
+      # 打包构建产物 (Linux/macOS)
+      - name: Package build (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd dist
+          tar -czf ../${{ matrix.artifact_name }}.tar.gz .
+          cd ..
+
+      # 打包构建产物 (Windows)
+      - name: Package build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          cd dist
+          7z a ../${{ matrix.artifact_name }}.zip .
+          cd ..
+
+      # 上传构建产物
+      - name: Upload artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-build
+          path: ${{ matrix.artifact_name }}.tar.gz
+
+      - name: Upload artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-build
+          path: ${{ matrix.artifact_name }}.zip
+
+  # 发布 Release (仅在打标签时触发)
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ./artifacts/linux-build/*.tar.gz
+            ./artifacts/windows-build/*.zip
+            ./artifacts/macos-build/*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
