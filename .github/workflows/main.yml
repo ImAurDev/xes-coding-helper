@@ -36,11 +36,9 @@ jobs:
       - name: Install dependencies
         run: bun install
 
-      # 执行编译构建（生成单文件可执行文件）
       - name: Build executable
         run: bun run build
 
-      # 验证构建产物存在
       - name: Verify build output
         shell: bash
         run: |
@@ -51,24 +49,20 @@ jobs:
           fi
           echo "Build output verified: ${{ matrix.output_file }}"
 
-      # 重命名为平台特定名称（避免覆盖）
       - name: Rename artifact
         shell: bash
         run: |
           mv ${{ matrix.output_file }} ${{ matrix.artifact_name }}
-          # 在 Unix 系统上添加执行权限
           if [ "${{ matrix.os }}" != "windows-latest" ]; then
             chmod +x ${{ matrix.artifact_name }}
           fi
 
-      # 上传构建产物
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
 
-  # 创建 Release（仅在打标签时触发）
   release:
     name: Create Release
     needs: build
