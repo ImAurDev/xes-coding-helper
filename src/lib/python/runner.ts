@@ -102,7 +102,7 @@ export class Runner {
             this.checkInterval = null;
         }
         this.closeBackend();
-        console.log("Runner stopped");
+        console.log("运行停止");
     }
 
     private checkState(): void {

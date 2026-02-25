@@ -539,10 +539,6 @@ function setValueToConfig(config: string, stuId?: string): void {
     console.log(`Set config: ${config}, stuId: ${stuId}`);
 }
 
-function getPort(): number {
-    return parseInt(process.env.THONNY_PORT || "8000");
-}
-
 export interface WebSocketServerOptions {
     port?: number;
     webtty?: Webtty;
