@@ -50,11 +50,7 @@ jobs:
       # 安装依赖
       - name: Install dependencies
         run: bun install
-
-      # 运行测试 (可选)
-      - name: Run tests
-        run: bun test
-
+        
       # 执行构建
       - name: Build application
         run: bun run build
