@@ -536,7 +536,7 @@ function getUserId(): string | null {
 }
 
 function setValueToConfig(config: string, stuId?: string): void {
-    console.log(`Set config: ${config}, stuId: ${stuId}`);
+    console.log(`设置配置: ${config}, stuId: ${stuId}`);
 }
 
 export interface WebSocketServerOptions {

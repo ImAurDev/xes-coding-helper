@@ -1,17 +1,146 @@
-import { spawn, type Subprocess } from "bun";
-import { mkdir, writeFile } from "fs/promises";
+import { file, spawn, type Subprocess } from "bun";
+import { mkdir, writeFile, readFile } from "fs/promises";
 import { existsSync } from "fs";
-import { join } from "path";
+import path, { join } from "path";
 import { homedir } from "os";
 import { Webtty, State } from "../websocket/websocket";
 
 const CACHE_PATH = process.env.THONNY_CACHE || join(homedir(), ".thonny", "cache");
 const ASSET_PATH = join(CACHE_PATH, "asset");
+const CONFIG_PATH = join(CACHE_PATH, "config.json");
 
 const PYTHON_CANDIDATES =
     process.platform === "win32" ? ["python", "py", "python3"] : ["python3", "python"];
 
+interface Config {
+    pythonPath?: string;
+}
+
+async function loadConfig(): Promise<Config> {
+    try {
+        if (existsSync(CONFIG_PATH)) {
+            const data = await readFile(CONFIG_PATH, "utf-8");
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        console.error("加载配置失败:", e);
+    }
+    return {};
+}
+
+async function saveConfig(config: Config): Promise<void> {
+    try {
+        const dir = join(CONFIG_PATH, "..");
+        if (!existsSync(dir)) {
+            await mkdir(dir, { recursive: true });
+        }
+        await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+    } catch (e) {
+        console.error("保存配置失败:", e);
+    }
+}
+
+async function getSavedPythonPath(): Promise<string | undefined> {
+    const config = await loadConfig();
+    return config.pythonPath;
+}
+
+async function savePythonPath(path: string): Promise<void> {
+    await saveConfig({ pythonPath: path });
+}
+
+async function findAllPythonPaths(): Promise<string[]> {
+    const paths: string[] = [];
+    const seen = new Set<string>();
+
+    if (process.platform === "win32") {
+        for (const candidate of PYTHON_CANDIDATES) {
+            try {
+                const proc = spawn({
+                    cmd: ["where", candidate],
+                    stdout: "pipe",
+                    stderr: "pipe",
+                });
+                const text = await new Response(proc.stdout).text();
+                const exitCode = await proc.exited;
+                if (exitCode === 0 && text.trim()) {
+                    const lines = text.trim().split("\n");
+                    for (const line of lines) {
+                        const path = line.trim();
+                        if (path && !seen.has(path.toLowerCase())) {
+                            seen.add(path.toLowerCase());
+                            paths.push(path);
+                        }
+                    }
+                }
+            } catch {
+                continue;
+            }
+        }
+
+        const commonPaths = [
+            "C:\\Python312\\python.exe",
+            "C:\\Python311\\python.exe",
+            "C:\\Python310\\python.exe",
+            "C:\\Python39\\python.exe",
+            "C:\\Program Files\\Python312\\python.exe",
+            "C:\\Program Files\\Python311\\python.exe",
+            "C:\\Program Files\\Python310\\python.exe",
+        ];
+        for (const p of commonPaths) {
+            if (existsSync(p) && !seen.has(p.toLowerCase())) {
+                seen.add(p.toLowerCase());
+                paths.push(p);
+            }
+        }
+    } else {
+        for (const candidate of PYTHON_CANDIDATES) {
+            try {
+                const proc = spawn({
+                    cmd: ["which", "-a", candidate],
+                    stdout: "pipe",
+                    stderr: "pipe",
+                });
+                const text = await new Response(proc.stdout).text();
+                const exitCode = await proc.exited;
+                if (exitCode === 0 && text.trim()) {
+                    const lines = text.trim().split("\n");
+                    for (const line of lines) {
+                        const path = line.trim();
+                        if (path && !seen.has(path)) {
+                            seen.add(path);
+                            paths.push(path);
+                        }
+                    }
+                }
+            } catch {
+                continue;
+            }
+        }
+
+        const commonPaths = [
+            "/usr/bin/python3",
+            "/usr/local/bin/python3",
+            "/opt/python3/bin/python3",
+        ];
+        for (const p of commonPaths) {
+            if (existsSync(p) && !seen.has(p)) {
+                seen.add(p);
+                paths.push(p);
+            }
+        }
+    }
+
+    return paths;
+}
+
 async function findPythonPath(): Promise<string> {
+    const savedPath = await getSavedPythonPath();
+    if (savedPath && existsSync(savedPath)) {
+        console.log(`使用已保存的Python路径: ${savedPath}`);
+        return savedPath;
+    }
+
     if (process.platform === "win32") {
         for (const candidate of PYTHON_CANDIDATES) {
             try {
@@ -163,11 +292,14 @@ export class Runner {
     }
 
     private async runPython(filePath: string, workDir: string, webtty: Webtty): Promise<void> {
-        try {
-            await this.detectPython();
+        const runWithAutoInstall = async (retryCount: number = 0): Promise<void> => {
+            const maxRetries = 1;
+            
+            await this.detectPython();   
+            const fileName = path.basename(filePath);
 
             this.pythonProcess = spawn({
-                cmd: [this.pythonPath, "-u", filePath],
+                cmd: [this.pythonPath, "-u", fileName],
                 cwd: workDir,
                 stdout: "pipe",
                 stderr: "pipe",
@@ -187,6 +319,8 @@ export class Runner {
 
             const stdoutReader = this.pythonProcess.stdout.getReader();
             const stderrReader = this.pythonProcess.stderr.getReader();
+            
+            let stderrBuffer = "";
 
             const readOutput = async (
                 reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -200,6 +334,10 @@ export class Runner {
                     const text = decoder.decode(value, { stream: true });
                     const output = text.replace(/\n/g, "\r\n");
 
+                    if (isError) {
+                        stderrBuffer += text;
+                    }
+
                     webtty.sendMsg({
                         type: "BackendEvent",
                         data: isError ? `[stderr] ${output}` : output,
@@ -211,6 +349,116 @@ export class Runner {
                 .then(async () => {
                     if (this.pythonProcess) {
                         const exitCode = await this.pythonProcess.exited;
+                        
+                        if (exitCode !== 0 && retryCount < maxRetries) {
+                            const moduleMatch = stderrBuffer.match(/ModuleNotFoundError: No module named '([^']+)'/);
+                            if (moduleMatch) {
+                                const moduleName = moduleMatch[1];
+                                const moduleMap: Record<string, string> = {
+                                    'pgzrun': 'pgzero',
+                                    'PIL': 'Pillow',
+                                    'cv2': 'opencv-python',
+                                    'sklearn': 'scikit-learn',
+                                    'nx': 'networkx',
+                                    'plt': 'matplotlib',
+                                    'sp': 'scipy',
+                                    'md': 'markdown',
+                                    'yaml': 'pyyaml',
+                                    'jieba': 'jieba',
+                                    'bs4': 'beautifulsoup4',
+                                    'grpc': 'grpcio',
+                                    'tensorflow': 'tensorflow',
+                                    'torch': 'torch',
+                                    ' telegram': 'python-telegram-bot',
+                                    'telebot': 'pyTelegramBotAPI',
+                                    'aiogram': 'aiogram',
+                                    'discord': 'discord.py',
+                                    'vk_api': 'vk-api',
+                                    'qrcode': 'qrcode[pil]',
+                                    'PIL.Image': 'Pillow',
+                                };
+                                
+                                let installName = moduleName;
+                                if (moduleMap[moduleName]) {
+                                    installName = moduleMap[moduleName];
+                                }
+                                
+                                webtty.sendMsg({
+                                    type: "BackendEvent",
+                                    data: `[stderr] 正在自动安装缺失模块: ${installName}...\r\n`,
+                                });
+                                
+                                try {
+                                    const installProc = spawn({
+                                        cmd: [
+                                            this.pythonPath, "-m", "pip", "install", 
+                                            installName, 
+                                            "--no-cache-dir",
+                                            "--no-warn-script-location"
+                                        ],
+                                        stdout: "pipe",
+                                        stderr: "pipe",
+                                    });
+                                    
+                                    const installStdoutReader = installProc.stdout.getReader();
+                                    const installStderrReader = installProc.stderr.getReader();
+                                    const decoder = new TextDecoder();
+                                    
+                                    const readInstallOutput = async (
+                                        reader: ReadableStreamDefaultReader<Uint8Array>,
+                                        isError: boolean
+                                    ) => {
+                                        while (true) {
+                                            const { done, value } = await reader.read();
+                                            if (done) break;
+                                            const text = decoder.decode(value, { stream: true });
+                                            const lines = text.split('\n').filter(line => line.trim());
+                                            for (const line of lines) {
+                                                if (line.includes('Collecting') || line.includes('Downloading') || 
+                                                    line.includes('Installing') || line.includes('Successfully') ||
+                                                    line.includes('%')) {
+                                                    webtty.sendMsg({
+                                                        type: "BackendEvent",
+                                                        data: `[stderr] ${line}\r\n`,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    };
+                                    
+                                    await Promise.all([
+                                        readInstallOutput(installStdoutReader, false),
+                                        readInstallOutput(installStderrReader, true)
+                                    ]);
+                                    
+                                    const installExitCode = await installProc.exited;
+                                    
+                                    if (installExitCode === 0) {
+                                        webtty.sendMsg({
+                                            type: "BackendEvent",
+                                            data: `[stderr] 模块 ${installName} 安装完成，正在重新运行...\r\n`,
+                                        });
+                                        
+                                        this.pythonProcess = null;
+                                        this.processReady = false;
+                                        await runWithAutoInstall(retryCount + 1);
+                                        return;
+                                    } else {
+                                        webtty.sendMsg({
+                                            type: "BackendEvent",
+                                            data: `[stderr] 自动安装 ${installName} 失败\r\n`,
+                                        });
+                                    }
+                                } catch (installError) {
+                                    const errMsg = installError instanceof Error ? installError.message : String(installError);
+                                    webtty.sendMsg({
+                                        type: "BackendEvent",
+                                        data: `[stderr] 自动安装 ${installName} 失败: ${errMsg}\r\n`,
+                                    });
+                                }
+                            }
+                        }
+                        
                         webtty.sendMsg({
                             command_name: "Run",
                         });
@@ -229,6 +477,10 @@ export class Runner {
                     this.mainIsRunning = false;
                     this.processReady = false;
                 });
+        };
+
+        try {
+            await runWithAutoInstall(0);
         } catch (error) {
             const errMsg = error instanceof Error ? error.message : String(error);
             webtty.sendMsg({
@@ -307,3 +559,5 @@ export function stopRunner(): void {
         _runner = null;
     }
 }
+
+export { findAllPythonPaths, getSavedPythonPath, savePythonPath };
