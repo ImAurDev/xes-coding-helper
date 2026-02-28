@@ -1,5 +1,5 @@
 import { httpPort } from "../..";
-import { AssetManage, getLocalPath } from "../doanload/downloadAssets";
+import { AssetManage, getLocalPath } from "../download/downloadAssets";
 import { packList } from "../python/package/lib_list";
 import { pkgManager } from "../python/package/package_manager";
 

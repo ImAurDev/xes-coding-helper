@@ -1,5 +1,5 @@
 import { serve, type Server } from "bun";
-import { AssetManage } from "../doanload/downloadAssets";
+import { AssetManage } from "../download/downloadAssets";
 
 const OUTPUT = "1";
 const INPUT = "1";

@@ -85,7 +85,7 @@ async function startServer() {
         });
     }
 
-    console.log("欢迎使用 更好的学而思编程助手 v0.0.0.3\n作者: 极光");
+    console.log("欢迎使用 更好的学而思编程助手 v0.0.0.4 ALPHA\n作者: 极光");
     if (httpPort > 0) {
         console.log(`HTTP 服务运行在端口 ${httpPort}`);
         console.log(`WebSocket 服务运行在端口 ${wsPort}`);
