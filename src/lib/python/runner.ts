@@ -394,7 +394,8 @@ export class Runner {
                                             this.pythonPath, "-m", "pip", "install", 
                                             installName, 
                                             "--no-cache-dir",
-                                            "--no-warn-script-location"
+                                            "--no-warn-script-location",
+                                            "--only-binary", ":all:"
                                         ],
                                         stdout: "pipe",
                                         stderr: "pipe",
@@ -403,6 +404,7 @@ export class Runner {
                                     const installStdoutReader = installProc.stdout.getReader();
                                     const installStderrReader = installProc.stderr.getReader();
                                     const decoder = new TextDecoder();
+                                    let fullOutput = "";
                                     
                                     const readInstallOutput = async (
                                         reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -412,11 +414,13 @@ export class Runner {
                                             const { done, value } = await reader.read();
                                             if (done) break;
                                             const text = decoder.decode(value, { stream: true });
+                                            fullOutput += text;
                                             const lines = text.split('\n').filter(line => line.trim());
                                             for (const line of lines) {
                                                 if (line.includes('Collecting') || line.includes('Downloading') || 
                                                     line.includes('Installing') || line.includes('Successfully') ||
-                                                    line.includes('%')) {
+                                                    line.includes('%') || line.includes('ERROR') ||
+                                                    line.includes('error') || line.includes('failed')) {
                                                     webtty.sendMsg({
                                                         type: "BackendEvent",
                                                         data: `[stderr] ${line}\r\n`,
@@ -444,9 +448,15 @@ export class Runner {
                                         await runWithAutoInstall(retryCount + 1);
                                         return;
                                     } else {
+                                        const errorLines = fullOutput.split('\n').filter(line => 
+                                            line.includes('ERROR') || line.includes('error') || 
+                                            line.includes('failed') || line.includes('Failed') ||
+                                            line.includes('Could not')
+                                        );
+                                        const errorMsg = errorLines.length > 0 ? errorLines.join('\n') : `退出码: ${installExitCode}`;
                                         webtty.sendMsg({
                                             type: "BackendEvent",
-                                            data: `[stderr] 自动安装 ${installName} 失败\r\n`,
+                                            data: `[stderr] 自动安装 ${installName} 失败: ${errorMsg}\r\n`,
                                         });
                                     }
                                 } catch (installError) {

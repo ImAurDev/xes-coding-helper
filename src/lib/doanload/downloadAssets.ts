@@ -1,16 +1,31 @@
 import { mkdir, readdir, readFile, writeFile, rm, stat, copyFile, rename } from "fs/promises";
 import { createHash } from "crypto";
-import { join, dirname, basename } from "path";
+import { join, dirname, basename, isAbsolute, sep } from "path";
 import { existsSync, createReadStream, mkdirSync } from "fs";
+import { homedir } from "os";
+import { isPortAvailable } from "../http/port";
 
 let _curPath: string = "";
 let _curPid: string = "";
 let _fileServer = null;
 const _fileMap: Map<string, { dict: string }> = new Map();
-const CACHE_PATH = process.env.THONNY_CACHE || `${process.env.HOME}/.thonny/cache`;
+
+function getCachePath(): string {
+    const defaultPath = join(homedir(), ".thonny", "cache");
+    if (existsSync(defaultPath)) {
+        return defaultPath;
+    }
+    const projectPath = join(process.cwd(), "thonny_cache");
+    if (existsSync(projectPath)) {
+        return projectPath;
+    }
+    return defaultPath;
+}
+
+const CACHE_PATH = process.env.THONNY_CACHE || getCachePath();
 const BASE_PORT = parseInt(process.env.THONNY_PORT || "8000");
 const FILE_SERVER_PORT = BASE_PORT + 4;
-const ASSET_PATH = join(CACHE_PATH, "asset");
+const ASSET_PATH = "asset";
 const ASSET_POOL_PATH = join(CACHE_PATH, "asset_pool");
 
 const CDNS = [
@@ -144,8 +159,6 @@ export class AssetManage {
     private localDirIds: Map<string, string> = new Map();
     private newDirInfos: DirInfo[] = [];
 
-    private static fileMap: Map<string, { dict: string; file: string }> = new Map();
-
     constructor() {
         this.assetPoolPath = ASSET_POOL_PATH;
     }
@@ -161,7 +174,7 @@ export class AssetManage {
         await this.init();
         this.jsonInfo = jsonInfo;
 
-        this.assetPath = join(ASSET_PATH, String(jsonInfo.projectId));
+        this.assetPath = join(CACHE_PATH, ASSET_PATH, String(jsonInfo.projectId));
 
         const fileName = "asset_info.json";
         const assetInfoPath = join(this.assetPath, fileName);
@@ -439,10 +452,11 @@ export class AssetManage {
                 }
             } else if (child.type === "oss_file") {
                 child.path = path;
-                AssetManage.fileMap.set(child.id, { dict: nextRelaPath, file: child.name });
+                _fileMap.set(child.id, { dict: nextRelaPath });
                 this.assets.push(child);
             } else if (child.type === "local_file") {
                 await this.createFile(curPath, child.value || "");
+                _fileMap.set(child.id, { dict: nextRelaPath });
             }
         }
     }
@@ -561,17 +575,24 @@ async function startFileServer(pid: string, assetPath: string): Promise<boolean>
     }
 
     try {
-        _fileServer = serve({
+        _fileServer = Bun.serve({
             port: FILE_SERVER_PORT,
             fetch(req) {
                 const url = new URL(req.url);
-                const filePath = join(assetPath, url.pathname);
+                let pathname = url.pathname;
+                if (sep === "\\") {
+                    pathname = pathname.replace(/\//g, "\\");
+                }
+                let filePath = join(assetPath, pathname);
 
                 if (!filePath.startsWith(assetPath)) {
                     return new Response("Forbidden", { status: 403 });
                 }
 
                 const file = Bun.file(filePath);
+                if (!file.exists()) {
+                    return new Response("Not Found", { status: 404 });
+                }
                 return new Response(file);
             },
         });
@@ -592,7 +613,16 @@ export async function getLocalPath(pid: string | number, fid: string): Promise<s
     pid = String(pid);
     let needStart = false;
 
+    console.log("=== getLocalPath ===");
+    console.log("CACHE_PATH:", CACHE_PATH);
+    console.log("ASSET_PATH:", ASSET_PATH);
+    console.log("pid:", pid);
+    console.log("fid:", fid);
+
     const fileInfo = _fileMap.get(fid);
+    console.log("fileInfo:", fileInfo);
+    console.log("_fileMap:", _fileMap);
+
     if (!fileInfo) {
         return false;
     }
@@ -608,8 +638,12 @@ export async function getLocalPath(pid: string | number, fid: string): Promise<s
     }
 
     if (needStart) {
-        const assetPath = join(CACHE_PATH, "asset", pid);
-
+        let assetPath = join(CACHE_PATH, ASSET_PATH, pid);
+        if (!isAbsolute(assetPath)) {
+            assetPath = join(process.cwd(), assetPath);
+        }
+        console.log("assetPath:", assetPath);
+        
         const success = await startFileServer(pid, assetPath);
         if (!success) {
             return false;

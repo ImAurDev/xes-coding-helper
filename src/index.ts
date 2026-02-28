@@ -43,10 +43,15 @@ async function startServer() {
         wsPort = result.wsPort;
     }
 
+    try {
     const httpServer = Bun.serve({
         port: httpPort,
         routes: routers
     });
+    } catch (error) {
+        console.error("发生错误: ", error?.message ?? error);
+        return;
+    }
 
     const webtty = new Webtty();
     const runner = new Runner({ webtty, pythonPath: "python" });
@@ -80,7 +85,7 @@ async function startServer() {
         });
     }
 
-    console.log("欢迎使用 更好的学而思编程助手 v0.0.0.2\n作者: 极光");
+    console.log("欢迎使用 更好的学而思编程助手 v0.0.0.3\n作者: 极光");
     if (httpPort > 0) {
         console.log(`HTTP 服务运行在端口 ${httpPort}`);
         console.log(`WebSocket 服务运行在端口 ${wsPort}`);

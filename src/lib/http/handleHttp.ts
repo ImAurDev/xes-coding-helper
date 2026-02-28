@@ -16,23 +16,21 @@ export async function path(req: Request) {
         const packageInfo = await req.text();
         const args = JSON.parse(packageInfo);
 
-        if (!args.id) return new Response("资源不存在", { status: 404 });
-        if (!args.message) return new Response("缺少资源信息", { status: 400 });
-
+        if (!args.id) return Response.json({ status_code: 404, message: "资源不存在" });
+        if (!args.message) return Response.json({ status_code: 400, message: "缺少资源信息" });
         const assetManager = new AssetManage();
         const result = await assetManager.handleAssetsJson(args.message);
-        if (!result.OK) return new Response("资源处理失败", { status: 400 });
-
+        if (!result.OK) return Response.json({ status_code: 400, message: "资源处理失败" });
         const pid = args?.project_id || 6;
         const port = httpPort + 4;
 
         const res = await getLocalPath(pid, args.id);
-        if (!res) return new Response("资源不存在", { status: 404 });
+        if (!res) return Response.json({ status_code: 404, message: "资源不存在" });
 
-        return new Response(`http://127.0.0.1:${port}/${res}`);
+        return Response.json({ path: `http://127.0.0.1:${port}/${res}` });
     } catch (error) {
         console.error("获取资源路径时错误: ", error);
-        return new Response("资源未找到", { status: 404 });
+        return Response.json({ status_code: 404, message: "资源未找到" });
     }
 }
 
